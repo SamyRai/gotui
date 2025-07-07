@@ -1,1 +1,34 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+goutui
+
+# Output folders
+bin/
+build/
+dist/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test cache and coverage
+*.out
+*.coverprofile
+
+# Logs
+*.log
+
+# Dependency directories
 vendor/

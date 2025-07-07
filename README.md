@@ -1,120 +1,133 @@
-# 🛠  PROJECT-BUILDER PROMPT
+# GoTUI
 
-> **You are: `GoTUI-DevAgent`**
-> A senior Go developer tasked with shipping an interactive TUI dashboard that wraps common Go CLI tasks (`go test`, benchmarks, fmt/diff, vet/lint, build).
-> Follow the specification below precisely.  All code must compile (Go 1.24.4).  Tests must pass (`go test ./...`).  Use idiomatic Go, Charmbracelet libraries, and minimal external deps.
+> Interactive terminal dashboard for Go development: test, benchmark, format, vet, and build — all in one beautiful TUI.
 
----
+[![Go Reference](https://pkg.go.dev/badge/github.com/damirmukimov/gotui.svg)](https://pkg.go.dev/github.com/damirmukimov/gotui)
+[![CI](https://github.com/damirmukimov/gotui/actions/workflows/ci.yml/badge.svg)](https://github.com/damirmukimov/gotui/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/damirmukimov/gotui)](https://goreportcard.com/report/github.com/damirmukimov/gotui)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## 1 ·  High-Level Goal
+<!-- ![GoTUI Demo](docs/demo.gif) -->
 
-Build a single-binary CLI named **`goutui`** that, when run in any Go module directory, presents a rich terminal UI with five primary tabs:
-
-| Tab Key | Name       | Underlying Command                            |
-| ------- | ---------- | --------------------------------------------- |
-| 🧪 `T`  | Tests      | `go test -json ./...`                         |
-| ⚙️ `B`  | Benchmarks | `go test -json -bench . ./...`                |
-| ✨ `F`   | Fmt / Diff | `gofmt -l -d` *(preview) → optional auto-fmt* |
-| 🔎 `V`  | Vet / Lint | `go vet ./...` (+ `staticcheck` if present)   |
-| 🔨 `C`  | Compile    | `go build ./...`                              |
-
-The TUI must stream results live, allow filtering/search, and show a concise status bar with totals, elapsed time, and key-bindings.
+GoTUI is a single-binary CLI tool that provides a rich terminal UI for common Go development tasks. Run it in any Go module directory to get live streaming results from tests, benchmarks, formatting, vetting, and builds.
 
 ---
 
-## 2 ·  Library Stack
+## Table of Contents
 
-| Layer           | Library (import path)                                                              |
-| --------------- | ---------------------------------------------------------------------------------- |
-| TUI engine      | **`github.com/charmbracelet/bubbletea`**                                           |
-| Widgets         | **`github.com/charmbracelet/bubbles`**                                             |
-| Styling         | **`github.com/charmbracelet/lipgloss`**                                            |
-| Markdown / diff | **`github.com/charmbracelet/glamour`** + `github.com/sergi/go-diff/diffmatchpatch` |
-| JSON events     | stdlib `encoding/json`                                                             |
-
-*No additional deps unless strictly necessary.*
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Key Bindings](#key-bindings)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## 3 ·  Folder Structure
+## Features
 
-```text
-goutui/
-├── cmd/
-│   └── goutui/               # main.go (Bubbletea program bootstrap)
-├── internal/
-│   ├── tui/                  # all Bubbletea models
-│   │   ├── model.go          # root model (tab bar + router)
-│   │   ├── tabs/
-│   │   │   ├── tests.go      # TestRunner model
-│   │   │   ├── bench.go      # BenchmarkRunner model
-│   │   │   ├── fmt.go        # FmtDiff model
-│   │   │   ├── vet.go        # VetRunner model
-│   │   │   └── build.go      # BuildRunner model
-│   │   └── components/       # TreeList, LogViewer, DiffViewer, etc.
-│   ├── runner/               # exec helpers & parsers
-│   │   ├── command.go        # async command executor
-│   │   ├── gotest_parser.go  # JSON → structs
-│   │   ├── bench_parser.go   # Parse bench lines
-│   │   └── diff.go           # gofmt diff helpers
-│   ├── style/                # lipgloss themes
-│   │   └── theme.go
-│   └── util/                 # misc helpers (fs, open editor)
-│       └── editor.go
-├── go.mod
-└── README.md
+**Five integrated tabs with live streaming results:**
+
+- 🧪 **Tests** (`T`): Stream `go test -json` results with real-time pass/fail counters
+- ⚙️ **Benchmarks** (`B`): Sortable performance table with comparison to previous runs
+- ✨ **Format** (`F`): Preview `gofmt` diffs and auto-format files
+- 🔎 **Vet** (`V`): Live `go vet` and `staticcheck` results with file navigation
+- 🔨 **Build** (`C`): Real-time compilation with error reporting
+
+**Key capabilities:**
+
+- **Live streaming output** from all Go commands
+- **Interactive navigation** with vim-like keybindings
+- **Rich UI components** powered by Charmbracelet Bubbletea
+- **File integration** - open files directly in your `$EDITOR`
+- **Error handling** with clear notifications and graceful recovery
+- **Zero configuration** - works in any Go module directory
+
+---
+
+## Installation
+
+### Go Install (Recommended)
+
+```bash
+go install github.com/damirmukimov/gotui/cmd/goutui@latest
 ```
 
----
+### Build from Source
 
-## 4 ·  Key Components & Behaviours
+```bash
+git clone https://github.com/damirmukimov/gotui.git
+cd gotui
+go build -o goutui ./cmd/goutui
+```
 
-### 4.1  TabBar
+### Download Binary
 
-* Displays all five tabs with emoji icons.
-* Keys: `Tab` / `Shift+Tab` to cycle, or direct jump `T/B/F/V/C`.
-
-### 4.2  TestRunner
-
-* Spawns `go test -json ./...` via `exec.CommandContext`.
-* Parses each JSON line into a `GoTestEvent` struct.
-* Maintains a **TreeList** (Package ➝ Test) with real-time status icons.
-* Shows failing test logs in a docked **LogViewer**; expand/collapse on `Enter`.
-* Live counters (pass/fail/skip/time) in the header.
-
-### 4.3  BenchmarkRunner
-
-* Same event stream, filtered for `"Action":"output","Bench"` lines.
-* Render a **sortable table** (`bubbles/table`) with `ns/op`, `ops/s`, `allocs`.
-* Maintain previous run to show Δ diff.
-
-### 4.4  FmtDiff
-
-* Runs `gofmt -l -d`.
-* Files with diff appear in a **List**; selecting shows a color diff (`DiffViewer`).
-* `a` key auto-formats selected file (writes back); `A` formats all.
-
-### 4.5  VetRunner
-
-* Executes `go vet ./...` (and `staticcheck ./...` if binary exists).
-* Parse output: `file:line:col: message`.
-* List view grouped by file; `o` opens offending line in `$EDITOR`.
-
-### 4.6  BuildRunner
-
-* Runs `go build ./...`.
-* Show progress spinner & final status (OK / fail with error list).
-
-### 4.7  Shared Components
-
-* `TreeList` (collapsible indent, checkbox icon, highlight).
-* `LogViewer` (scrollable viewport, ANSI color, copy to clipboard).
-* `DiffViewer` (unified diff colored).
-* `StatusBar` (current tab, totals, elapsed, hints).
+Download the latest release from [GitHub Releases](https://github.com/damirmukimov/gotui/releases).
 
 ---
 
-## 5 ·  User Interaction (Key Map)
+## Quick Start
+
+```bash
+# Navigate to any Go project
+cd your-go-project
+
+# Launch GoTUI
+goutui
+```
+
+That's it! GoTUI will automatically detect your Go module and present the dashboard.
+
+---
+
+## Usage
+
+### Basic Navigation
+
+- **Switch tabs**: `Tab` / `Shift+Tab` or direct jump with `T`, `B`, `F`, `V`, `C`
+- **Navigate lists**: `j` / `k` or arrow keys
+- **Expand/collapse**: `Enter`
+- **Refresh current tab**: `r`
+- **Quit**: `q` or `Ctrl+C`
+
+### Tab-Specific Features
+
+#### Tests Tab (T)
+
+- Toggle fail-only filter: `f`
+- Open failing test in editor: `o`
+- Live search: `/`
+
+#### Benchmarks Tab (B)
+
+- Sort by different columns
+- Compare with previous runs
+- View detailed performance metrics
+
+#### Format Tab (F)
+
+- Auto-format selected file: `a`
+- Auto-format all files: `A`
+- Preview diffs before applying
+
+#### Vet Tab (V)
+
+- Navigate to problematic lines: `o`
+- View detailed lint messages
+- Integrate with `staticcheck` if available
+
+#### Build Tab (C)
+
+- View compilation errors
+- Navigate to error locations
+- Real-time build status
+
+---
+
+## Key Bindings
 
 | Key               | Context     | Action                                      |
 | ----------------- | ----------- | ------------------------------------------- |
@@ -125,82 +138,102 @@ goutui/
 | `f`               | Tests       | Toggle *fail-only* filter                   |
 | `/`               | Lists       | Live search                                 |
 | `r`               | Any tab     | Re-run current command                      |
-| `o`               | Vet / Tests | Open file\@line in `$EDITOR`                |
-| `a` / `A`         | FmtDiff     | Auto-fmt selected / all                     |
-| `q` / `Ctrl+C`    | Global      | Quit                                        |
+| `o`               | Vet / Tests | Open file@line in `$EDITOR`                |
+| `a / A`           | FmtDiff     | Auto-fmt selected / all                     |
+| `q / Ctrl+C`      | Global      | Quit                                        |
 
 ---
 
-## 6 ·  Implementation Milestones
+## Development
 
-> **M0 – Bootstrap**
->
-> * CLI scaffold (`cmd/goutui/main.go`) with Bubbletea hello-world.
-> * Add TabBar switching.
+### Prerequisites
 
-> **M1 – TestRunner MVP**
->
-> * JSON parser & streaming.
-> * TreeList with live pass/fail counts.
-> * StatusBar totals.
+- Go 1.24 or later
+- A terminal with 256-color support
 
-> **M2 – BenchRunner + Table**
->
-> * Parse bench lines; render sortable table.
-> * Diff vs previous run.
+### Setup
 
-> **M3 – FmtDiff**
->
-> * Execute `gofmt -l -d`.
-> * DiffViewer component + auto-fmt action.
+```bash
+git clone https://github.com/damirmukimov/gotui.git
+cd gotui
+go mod download
+```
 
-> **M4 – Vet & Build Tabs**
->
-> * Parse vet output; open in editor.
-> * Build spinner + error list.
+### Running
 
-> **M5 – Polishing & Docs**
->
-> * Lipgloss theme.
-> * README usage instructions.
-> * `make run`, `make test`, release notes.
+```bash
+# Run from source
+go run ./cmd/goutui
 
----
+# Run tests
+go test ./...
 
-## 7 ·  Coding Conventions
+# Run linter
+go vet ./...
+```
 
-* Use **Go 1.24**.
-* Pass `context.Context` to long-running commands.
-* No global state; Bubbletea `Model` per tab.
-* Error handling: log via `log.Printf`, surface in StatusBar.
-* Static analysis: `go vet`, `golangci-lint run`.
+### Project Structure
 
----
+```text
+gotui/
+├── cmd/goutui/           # Main application entry point
+├── internal/
+│   ├── tui/              # Bubbletea models and components
+│   │   ├── model.go      # Root model (tab router)
+│   │   ├── tabs/         # Individual tab implementations
+│   │   └── components/   # Reusable UI components
+│   ├── runner/           # Command execution and parsing
+│   ├── style/            # Lipgloss themes and styling
+│   └── util/             # Utilities (editor integration, etc.)
+└── docs/                 # Documentation and examples
+```
 
-## 8 ·  Acceptance Criteria
+### Architecture
 
-1. `go run ./cmd/goutui` launches TUI inside any Go module.
-2. Switching tabs does not kill running subprocesses unexpectedly.
-3. All five tabs produce accurate results matching CLI equivalents.
-4. `go test ./...` inside repo returns zero **after** generation (`go vet` clean).
-5. Works on macOS & Linux (UTF-8, 256-color terminals).
-6. CI workflow (`.github/workflows/ci.yml`) runs `go test ./...` + linter.
+GoTUI follows clean architecture principles:
+
+- **Separation of concerns**: UI, business logic, and command execution are clearly separated
+- **Event-driven**: Uses Bubbletea's message-passing architecture
+- **Composable components**: Reusable UI components with consistent interfaces
+- **Graceful error handling**: Robust error layer with user-friendly notifications
 
 ---
 
-## 9 ·  Suggested Future Features (not in v1)
+## Contributing
 
-* Coverage heat-map (`go test -coverprofile`).
-* Git-aware “changed files only” run.
-* Notifications (`terminal-notifier` / `notify-send`) on completion.
-* YAML/JSON config for custom key bindings.
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Quick Contribution Guide
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes and add tests
+4. Ensure tests pass: `go test ./...`
+5. Ensure linting passes: `go vet ./...`
+6. Commit your changes: `git commit -m 'feat: add amazing feature'`
+7. Push to the branch: `git push origin feature/amazing-feature`
+8. Open a Pull Request
+
+### Development Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned features and development priorities.
 
 ---
 
-### 🏁 Deliverables
+## License
 
-* **Source code** in the structure above.
-* **README** with install & key-bindings.
-* **Demo gif** (optional) recorded via `asciinema` or `gifcast`.
+MIT License - see [LICENSE](LICENSE) file for details.
 
-Ready?  Begin with **Milestone 0**: bootstrap Bubbletea app + TabBar component.
+---
+
+## Acknowledgments
+
+Built with love using:
+
+- [Charmbracelet Bubbletea](https://github.com/charmbracelet/bubbletea) - The TUI framework
+- [Charmbracelet Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
+- [Charmbracelet Lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
+
+---
+
+*Made with ❤️ for the Go community*
