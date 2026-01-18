@@ -1,4 +1,4 @@
-name: Release Go Package
+name: Release
 on:
   push:
     tags:
@@ -17,27 +17,44 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.25'
 
-      - name: Log in to GitHub Packages
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run tests
+        run: go test -v -race ./...
 
-      - name: Build Go binary
+      - name: Build binaries for multiple platforms
         run: |
-          go build -o goutui ./cmd/goutui
+          # Create build directory
+          mkdir -p dist
 
-      - name: Publish Go module to GitHub Packages
+          # Build for different platforms
+          GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/goutui-linux-amd64 ./cmd/goutui
+          GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/goutui-linux-arm64 ./cmd/goutui
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/goutui-darwin-amd64 ./cmd/goutui
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/goutui-darwin-arm64 ./cmd/goutui
+          GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/goutui-windows-amd64.exe ./cmd/goutui
+
+          # Make Linux binaries executable
+          chmod +x dist/goutui-linux-*
+
+      - name: Create release archives
         run: |
-          go list -m
-          GOPROXY=proxy.golang.org go list -m github.com/${{ github.repository }}@${{ github.ref_name }}
+          cd dist
+          tar -czf goutui-linux-amd64.tar.gz goutui-linux-amd64
+          tar -czf goutui-linux-arm64.tar.gz goutui-linux-arm64
+          tar -czf goutui-darwin-amd64.tar.gz goutui-darwin-amd64
+          tar -czf goutui-darwin-arm64.tar.gz goutui-darwin-arm64
+          zip goutui-windows-amd64.zip goutui-windows-amd64.exe
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: goutui
+          files: |
+            dist/goutui-linux-amd64.tar.gz
+            dist/goutui-linux-arm64.tar.gz
+            dist/goutui-darwin-amd64.tar.gz
+            dist/goutui-darwin-arm64.tar.gz
+            dist/goutui-windows-amd64.zip
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
