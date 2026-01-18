@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"goutui/internal/runner"
 	"goutui/internal/style"
 	"goutui/internal/tui/components"
@@ -16,24 +17,26 @@ import (
 // focusOnTabBar: true if the tab bar is focused, false if the tab content is focused
 // This enables clear navigation and visual feedback.
 type Model struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	tabBar     components.TabBar
-	testTab    tabs.TabInterface
-	fmtTab     tabs.TabInterface
-	buildTab   tabs.TabInterface
-	benchTab   tabs.TabInterface
-	vetTab     tabs.TabInterface
-	width      int
-	height     int
-	ready      bool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	tabBar        components.TabBar
+	testTab       tabs.TabInterface
+	fmtTab        tabs.TabInterface
+	buildTab      tabs.TabInterface
+	benchTab      tabs.TabInterface
+	vetTab        tabs.TabInterface
+	width         int
+	height        int
+	ready         bool
 	focusOnTabBar bool // true = tab bar focused, false = tab content focused
+	showHelp      bool // true if help overlay is shown
 	notification  runner.NotificationMsg // For displaying global messages
 }
 
 // MainKeyMap defines global key bindings
 type MainKeyMap struct {
 	Quit        key.Binding
+	Help        key.Binding
 	Refresh     key.Binding
 	NextTab     key.Binding
 	PrevTab     key.Binding
@@ -50,6 +53,10 @@ func DefaultMainKeyMap() MainKeyMap {
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q/ctrl+c", "quit"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
 		),
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),
@@ -92,16 +99,17 @@ func DefaultMainKeyMap() MainKeyMap {
 func NewModel() Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	return Model{
-		ctx:      ctx,
-		cancel:   cancel,
-		tabBar:   components.NewTabBar(),
-		testTab:  tabs.NewTestRunner(ctx),
-		fmtTab:   tabs.NewFmtDiff(ctx),
-		buildTab: tabs.NewBuildRunner(ctx),
-		benchTab: tabs.NewBenchmarkRunner(ctx),
-		vetTab:   tabs.NewVetRunner(ctx),
-		ready:    false,
+		ctx:           ctx,
+		cancel:        cancel,
+		tabBar:        components.NewTabBar(),
+		testTab:       tabs.NewTestRunner(ctx),
+		fmtTab:        tabs.NewFmtDiff(ctx),
+		buildTab:      tabs.NewBuildRunner(ctx),
+		benchTab:      tabs.NewBenchmarkRunner(ctx),
+		vetTab:        tabs.NewVetRunner(ctx),
+		ready:         false,
 		focusOnTabBar: true, // Start with tab bar focused
+		showHelp:      false,
 	}
 }
 
@@ -130,7 +138,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Set dimensions for all components
 		m.tabBar.SetWidth(m.width)
 
-		contentHeight := m.height - 4 // Account for tab bar and status bar
+		// Account for tab bar (2 lines) and status bar (1 line) = 3 lines total
+		// Also account for potential spacing between elements
+		contentHeight := m.height - 3
+		if contentHeight < 10 {
+			contentHeight = m.height - 1 // Minimum space, keep at least status bar
+		}
 		m.testTab.SetSize(m.width, contentHeight)
 		m.fmtTab.SetSize(m.width, contentHeight)
 		m.buildTab.SetSize(m.width, contentHeight)
@@ -138,6 +151,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vetTab.SetSize(m.width, contentHeight)
 
 	case tea.KeyMsg:
+		// Handle help overlay first (global)
+		if m.showHelp {
+			if msg.String() == "esc" || msg.String() == "?" {
+				m.showHelp = false
+				return m, nil
+			}
+		}
+
 		keyMap := DefaultMainKeyMap()
 		if m.focusOnTabBar {
 			switch msg.String() {
@@ -163,6 +184,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tabBar.JumpToTab("V")
 				case key.Matches(msg, keyMap.JumpToBuild):
 					m.tabBar.JumpToTab("C")
+				case key.Matches(msg, keyMap.Help):
+					m.showHelp = !m.showHelp
 				case key.Matches(msg, keyMap.Quit):
 					m.cleanup()
 					return m, tea.Quit
@@ -175,6 +198,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusOnTabBar = true // Move focus to tab bar
 			default:
 				switch {
+				case key.Matches(msg, keyMap.Help):
+					m.showHelp = !m.showHelp
 				case key.Matches(msg, keyMap.Quit):
 					m.cleanup()
 					return m, tea.Quit
@@ -272,30 +297,44 @@ func (m Model) View() string {
 		content,
 	)
 
+	// Render help overlay if requested
+	var helpView string
+	if m.showHelp {
+		helpView = m.renderHelp()
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		notificationView, // Display at the top
+		helpView,         // Help overlay (when shown)
 		mainContent,
 		statusBar,
 	)
 }
 
-// renderNotification renders the global notification bar.
+// renderNotification renders the global notification bar with improved accessibility.
 func (m Model) renderNotification() string {
-	var style lipgloss.Style
+	var notificationStyle lipgloss.Style
+	var prefix string
+	
 	switch m.notification.Type {
 	case runner.SuccessNotification:
-		style = lipgloss.NewStyle().Background(lipgloss.Color("#28A745"))
+		notificationStyle = style.NotificationSuccessStyle
+		prefix = style.GetStatusIcon(style.PassIcon, style.PassText) + " "
 	case runner.ErrorNotification:
-		style = lipgloss.NewStyle().Background(lipgloss.Color("#DC3545"))
+		notificationStyle = style.NotificationErrorStyle
+		prefix = style.GetStatusIcon(style.FailIcon, style.FailText) + " "
 	default:
-		style = lipgloss.NewStyle().Background(lipgloss.Color("#007BFF"))
+		notificationStyle = style.NotificationInfoStyle
+		prefix = "ℹ "
 	}
 
-	return style.Width(m.width).Padding(0, 1).Render(m.notification.Message)
+	// Add text prefix for accessibility (visible even without color)
+	message := prefix + m.notification.Message
+	return notificationStyle.Width(m.width).Render(message)
 }
 
-// renderStatusBar renders the bottom status bar
+// renderStatusBar renders the bottom status bar with improved UX
 func (m Model) renderStatusBar() string {
 	activeTab := m.getCurrentTab()
 	if activeTab == nil {
@@ -305,38 +344,166 @@ func (m Model) renderStatusBar() string {
 	// Get status from active tab
 	status := activeTab.GetStatus()
 
-	// Add key hints
+	// Add focus indicator
+	focusIndicator := ""
+	if m.focusOnTabBar {
+		focusIndicator = " [TAB BAR] "
+	} else {
+		focusIndicator = " [CONTENT] "
+	}
+
+	// Add key hints - more organized and readable
 	hints := []string{
 		"q: quit",
 		"r: refresh",
-		"tab: next",
-		"t/b/f/v/c: jump to tab",
+		"?: help",
+	}
+
+	// Add navigation hints based on focus
+	if m.focusOnTabBar {
+		hints = append(hints, "←→: navigate", "↓/Enter: focus")
+	} else {
+		hints = append(hints, "↑/Esc: focus tabs")
 	}
 
 	// Get tab-specific hints
 	tabHints := activeTab.GetKeyHints()
-	hints = append(hints, tabHints...)
+	if len(tabHints) > 0 {
+		hints = append(hints, tabHints...)
+	}
 
+	// Format hints with proper spacing between each hint
+	// Join hints with " • " separator for better readability
+	hintParts := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		hintParts = append(hintParts, hint)
+	}
 	hintText := lipgloss.NewStyle().
 		Foreground(style.SubtleColor).
-		Render(" | " + lipgloss.JoinHorizontal(lipgloss.Left, hints...))
+		Render(" • " + strings.Join(hintParts, " • "))
 
-	// Combine status and hints
-	statusText := style.StatusStyle.Render(status)
+	// Combine status, focus indicator, and hints
+	statusText := style.StatusStyle.Render(status + focusIndicator)
+
+	// Calculate available width for hints
+	statusWidth := lipgloss.Width(statusText)
+	padding := 2 // Left and right padding
+	availableWidth := m.width - statusWidth - padding
+	
+	// Truncate hints if they don't fit
+	hintWidth := lipgloss.Width(hintText)
+	if hintWidth > availableWidth {
+		// Truncate hint text to fit
+		truncated := hintText
+		for lipgloss.Width(truncated) > availableWidth && len(hintParts) > 1 {
+			// Remove last hint
+			hintParts = hintParts[:len(hintParts)-1]
+			truncated = lipgloss.NewStyle().
+				Foreground(style.SubtleColor).
+				Render(" • " + strings.Join(hintParts, " • "))
+		}
+		hintText = truncated
+	}
 
 	// Layout with status on left and hints on right
 	statusBar := lipgloss.NewStyle().
 		Width(m.width).
 		Background(style.SelectedColor).
+		Padding(0, 1).
 		Render(
 			lipgloss.JoinHorizontal(
 				lipgloss.Left,
 				statusText,
-				hintText,
+				lipgloss.NewStyle().
+					Width(m.width-statusWidth-padding).
+					Align(lipgloss.Right).
+					Render(hintText),
 			),
 		)
 
 	return statusBar
+}
+
+// renderHelp renders the help overlay with improved design
+func (m Model) renderHelp() string {
+	helpContent := []string{
+		style.HeaderStyle.Render("GoTUI - Terminal UI for Go Development"),
+		"",
+		style.HeaderStyle.Copy().Foreground(style.AccentColor).Render("Global Shortcuts:"),
+		"  Tab/Shift+Tab    Switch between tabs",
+		"  ←/→              Navigate tabs (when tab bar focused)",
+		"  t/b/f/v/c        Jump to Tests/Benchmarks/Format/Vet/Build",
+		"  ?                Toggle this help",
+		"  r                Refresh current tab",
+		"  q/Ctrl+C         Quit",
+		"",
+		style.HeaderStyle.Copy().Foreground(style.AccentColor).Render("Navigation:"),
+		"  ↑/↓/j/k          Navigate lists",
+		"  Enter            Open file in editor / Toggle split view",
+		"  Space            Expand/collapse items",
+		"  Esc              Return to tab navigation",
+		"  ↓/Enter          Focus content (from tab bar)",
+		"  ↑/Esc            Focus tab bar (from content)",
+		"",
+		style.HeaderStyle.Copy().Foreground(style.InfoColor).Render("Current Tab: " + m.getCurrentTabName()),
+		"",
+		style.SubtleStyle.Render("Press ? or Esc to close this help"),
+	}
+
+	// Create a bordered box for the help content with better styling
+	boxWidth := 85
+	if m.width-8 < 85 {
+		boxWidth = m.width - 8
+	}
+	if boxWidth < 50 {
+		boxWidth = 50
+	}
+	boxHeight := len(helpContent) + 4
+
+	helpText := lipgloss.JoinVertical(lipgloss.Left, helpContent...)
+
+	// Create a semi-transparent overlay effect
+	box := lipgloss.NewStyle().
+		Width(boxWidth).
+		Height(boxHeight).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(style.PrimaryColor).
+		Padding(1, 2).
+		Background(style.BackgroundColor).
+		Render(helpText)
+
+	// Center the box horizontally and vertically
+	verticalPadding := (m.height - boxHeight) / 2
+	if verticalPadding < 0 {
+		verticalPadding = 0
+	}
+	
+	return lipgloss.JoinVertical(
+		lipgloss.Center,
+		strings.Repeat("\n", verticalPadding),
+		lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Render(box),
+	)
+}
+
+// getCurrentTabName returns the name of the currently active tab
+func (m Model) getCurrentTabName() string {
+	switch m.tabBar.ActiveTab() {
+	case 0:
+		return "Tests"
+	case 1:
+		return "Format"
+	case 2:
+		return "Build"
+	case 3:
+		return "Benchmarks"
+	case 4:
+		return "Vet & Lint"
+	default:
+		return "Unknown"
+	}
 }
 
 // getCurrentTab returns the currently active tab

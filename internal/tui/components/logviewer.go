@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"goutui/internal/style"
 	"strings"
 
@@ -178,26 +179,40 @@ func (lv *LogViewer) matchesFilter(entry LogEntry) bool {
 		strings.Contains(strings.ToLower(entry.Source), filter)
 }
 
-// formatLogEntry formats a log entry for display
+// formatLogEntry formats a log entry for display with improved accessibility
 func (lv *LogViewer) formatLogEntry(entry LogEntry) string {
 	var levelStyle lipgloss.Style
+	var levelIcon string
+	var levelText string
 	
 	switch strings.ToLower(entry.Level) {
 	case "error", "fail":
 		levelStyle = style.ErrorStyle
+		levelIcon = style.GetStatusIcon(style.FailIcon, style.FailText)
+		levelText = "ERROR"
 	case "warn", "warning":
 		levelStyle = style.WarningStyle
+		levelIcon = "⚠"
+		levelText = "WARN"
 	case "info":
-		levelStyle = lipgloss.NewStyle().Foreground(style.InfoColor)
+		levelStyle = lipgloss.NewStyle().Foreground(style.InfoColor).Bold(true)
+		levelIcon = "ℹ"
+		levelText = "INFO"
 	case "debug":
 		levelStyle = lipgloss.NewStyle().Foreground(style.SubtleColor)
+		levelIcon = "🔍"
+		levelText = "DEBUG"
 	case "pass", "ok":
 		levelStyle = style.SuccessStyle
+		levelIcon = style.GetStatusIcon(style.PassIcon, style.PassText)
+		levelText = "PASS"
 	default:
 		levelStyle = lipgloss.NewStyle().Foreground(style.TextColor)
+		levelIcon = ""
+		levelText = strings.ToUpper(entry.Level)
 	}
 	
-	// If we have structured data, format it nicely
+	// If we have structured data, format it nicely with icons
 	if entry.Source != "" || entry.Timestamp != "" {
 		parts := []string{}
 		
@@ -207,7 +222,13 @@ func (lv *LogViewer) formatLogEntry(entry LogEntry) string {
 		}
 		
 		if entry.Level != "" {
-			parts = append(parts, levelStyle.Render(strings.ToUpper(entry.Level)))
+			levelDisplay := levelIcon
+			if levelDisplay == "" {
+				levelDisplay = levelText
+			} else {
+				levelDisplay = levelIcon + " " + levelText
+			}
+			parts = append(parts, levelStyle.Render(levelDisplay))
 		}
 		
 		if entry.Source != "" {
@@ -219,9 +240,13 @@ func (lv *LogViewer) formatLogEntry(entry LogEntry) string {
 		return lipgloss.JoinHorizontal(lipgloss.Left, prefix, " ", entry.Message)
 	}
 	
-	// For raw messages, just apply basic styling
+	// For raw messages, apply styling with level indicator
 	if entry.Level != "" {
-		return levelStyle.Render(entry.Message)
+		prefix := levelIcon
+		if prefix != "" {
+			prefix = prefix + " "
+		}
+		return levelStyle.Render(prefix + entry.Message)
 	}
 	
 	return entry.Message
@@ -262,18 +287,18 @@ func (lv LogViewer) View() string {
 		title += " (filtered: " + lv.filter + ")"
 	}
 	
-	// Add log count
+	// Add log count with proper number formatting
 	visibleCount := lv.getVisibleLogCount()
 	totalCount := len(lv.logs)
 	
 	if lv.showFilter {
 		title += lipgloss.NewStyle().
 			Foreground(style.SubtleColor).
-			Render(" [" + string(rune(visibleCount+'0')) + "/" + string(rune(totalCount+'0')) + "]")
+			Render(fmt.Sprintf(" [%d/%d]", visibleCount, totalCount))
 	} else {
 		title += lipgloss.NewStyle().
 			Foreground(style.SubtleColor).
-			Render(" [" + string(rune(totalCount+'0')) + "]")
+			Render(fmt.Sprintf(" [%d]", totalCount))
 	}
 	
 	titleBar := style.HeaderStyle.Render(title)

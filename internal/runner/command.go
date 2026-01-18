@@ -3,6 +3,7 @@ package runner
 import (
 	"bufio"
 	"context"
+	"goutui/internal/errors"
 	"io"
 	"os/exec"
 	"sync"
@@ -90,12 +91,12 @@ func (cr *CommandRunner) Run(name string, args ...string) tea.Cmd {
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			return NotificationMsg{Type: ErrorNotification, Message: "Failed to get stdout pipe: " + err.Error()}
+			return NotificationMsg{Type: ErrorNotification, Message: errors.WrapWithMsg("stdout pipe", err, "failed to get stdout pipe").Error()}
 		}
 
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
-			return NotificationMsg{Type: ErrorNotification, Message: "Failed to get stderr pipe: " + err.Error()}
+			return NotificationMsg{Type: ErrorNotification, Message: errors.WrapWithMsg("stderr pipe", err, "failed to get stderr pipe").Error()}
 		}
 
 		outputChan := make(chan tea.Msg)
@@ -115,7 +116,7 @@ func (cr *CommandRunner) Run(name string, args ...string) tea.Cmd {
 		}()
 
 		if err := cmd.Start(); err != nil {
-			return NotificationMsg{Type: ErrorNotification, Message: "Failed to start command: " + err.Error()}
+			return NotificationMsg{Type: ErrorNotification, Message: errors.WrapWithMsg("command start", err, "failed to start command").Error()}
 		}
 
 		// Goroutine to wait for command completion and send final messages
@@ -158,17 +159,8 @@ func (cr *CommandRunner) Wait() {
 	cr.wg.Wait()
 }
 
-// Common errors
+// Common command errors
 var (
-	ErrCommandAlreadyRunning = &CommandError{"command already running"}
-	ErrCommandNotFound       = &CommandError{"command not found"}
+	ErrCommandAlreadyRunning = errors.New("command already running")
+	ErrCommandNotFound       = errors.New("command not found")
 )
-
-// CommandError represents a command execution error
-type CommandError struct {
-	message string
-}
-
-func (e *CommandError) Error() string {
-	return e.message
-}

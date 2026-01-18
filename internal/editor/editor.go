@@ -1,24 +1,25 @@
-package util
+package editor
 
 import (
 	"fmt"
+	"goutui/internal/errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// EditorConfig holds configuration for opening files in editors
-type EditorConfig struct {
+// Config holds configuration for opening files in editors
+type Config struct {
 	Command string
 	Args    []string
 }
 
-// GetEditorConfig returns the appropriate editor configuration
-func GetEditorConfig() EditorConfig {
-	editor := os.Getenv("EDITOR")
+// GetConfig returns the appropriate editor configuration
+func GetConfig() Config {
+	editor := os.Getenv("VISUAL") // VISUAL takes precedence over EDITOR
 	if editor == "" {
-		editor = os.Getenv("VISUAL")
+		editor = os.Getenv("EDITOR")
 	}
 	if editor == "" {
 		// Try to detect common editors
@@ -33,26 +34,26 @@ func GetEditorConfig() EditorConfig {
 		editor = "vim" // Fallback
 	}
 
-	return EditorConfig{
+	return Config{
 		Command: editor,
 		Args:    []string{},
 	}
 }
 
-// OpenInEditor opens a file at a specific line and column in the user's editor
-func OpenInEditor(filename string, line int, column int) error {
+// OpenAtLine opens a file at a specific line and column in the user's editor
+func OpenAtLine(filename string, line int, column int) error {
 	// Convert to absolute path
 	absPath, err := filepath.Abs(filename)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %w", err)
+		return errors.WrapWithPath("absolute path", err, "failed to get absolute path", filename)
 	}
 
 	// Check if file exists
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		return fmt.Errorf("file does not exist: %s", absPath)
+		return errors.WrapWithPath("file check", errors.ErrFileNotFound, "file does not exist", absPath)
 	}
 
-	config := GetEditorConfig()
+	config := GetConfig()
 	editor := config.Command
 
 	var cmd *exec.Cmd
@@ -93,25 +94,25 @@ func OpenInEditor(filename string, line int, column int) error {
 	return cmd.Start() // Use Start() instead of Run() to not block
 }
 
-// OpenFileInEditor opens a file without specific line/column
-func OpenFileInEditor(filename string) error {
-	return OpenInEditor(filename, 1, 1)
+// OpenFile opens a file without specific line/column
+func OpenFile(filename string) error {
+	return OpenAtLine(filename, 1, 1)
 }
 
-// OpenDirectoryInEditor opens a directory in the editor
-func OpenDirectoryInEditor(dirname string) error {
+// OpenDirectory opens a directory in the editor
+func OpenDirectory(dirname string) error {
 	// Convert to absolute path
 	absPath, err := filepath.Abs(dirname)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %w", err)
+		return errors.WrapWithPath("absolute path", err, "failed to get absolute path", dirname)
 	}
 
 	// Check if directory exists
 	if info, err := os.Stat(absPath); os.IsNotExist(err) || !info.IsDir() {
-		return fmt.Errorf("directory does not exist: %s", absPath)
+		return errors.WrapWithPath("directory check", errors.ErrDirectoryNotFound, "directory does not exist", absPath)
 	}
 
-	config := GetEditorConfig()
+	config := GetConfig()
 	editor := config.Command
 
 	var cmd *exec.Cmd
@@ -142,9 +143,14 @@ func OpenDirectoryInEditor(dirname string) error {
 
 // DetectProjectRoot tries to find the project root directory
 func DetectProjectRoot(startPath string) (string, error) {
+	// Check if the start path exists
+	if _, err := os.Stat(startPath); os.IsNotExist(err) {
+		return "", errors.WrapWithPath("path check", errors.ErrDirectoryNotFound, "start path does not exist", startPath)
+	}
+
 	currentPath, err := filepath.Abs(startPath)
 	if err != nil {
-		return "", err
+		return "", errors.WrapWithPath("absolute path", err, "failed to get absolute path", startPath)
 	}
 
 	// Look for common project indicators
@@ -179,9 +185,13 @@ func DetectProjectRoot(startPath string) (string, error) {
 
 // ParseFileLocation parses a file location string like "file.go:10:5"
 func ParseFileLocation(location string) (file string, line int, column int, err error) {
+	if location == "" {
+		return "", 0, 0, errors.WrapWithMsg("parse location", errors.ErrInvalidFormat, "empty location string")
+	}
+
 	parts := strings.Split(location, ":")
-	if len(parts) == 0 {
-		return "", 0, 0, fmt.Errorf("invalid location format")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", 0, 0, errors.WrapWithMsg("parse location", errors.ErrInvalidFormat, "invalid location format")
 	}
 
 	file = parts[0]

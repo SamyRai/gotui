@@ -2,9 +2,11 @@ package tabs
 
 import (
 	"context"
+	"goutui/internal/editor"
 	"goutui/internal/runner"
 	"goutui/internal/style"
-	"goutui/internal/util"
+	"goutui/internal/tui/components"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,7 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// VetProblem represents a problem found by go vet
+// VetProblem represents a problem found by vet/lint tools
 type VetProblem struct {
 	File    string
 	Line    int
@@ -23,6 +25,7 @@ type VetProblem struct {
 	Message string
 	Package string
 	Raw     string
+	Tool    string // "govet" or "staticcheck"
 }
 
 // String returns a formatted string representation
@@ -37,24 +40,31 @@ func (vp VetProblem) FilterValue() string {
 
 // Title returns the title for the list item
 func (vp VetProblem) Title() string {
-	return vp.Message
+	if vp.Tool == "staticcheck" {
+		return "[SC] " + vp.Message
+	}
+	return "[VET] " + vp.Message
 }
 
 // Description returns the description for the list item
 func (vp VetProblem) Description() string {
-	return util.FormatFileLocation(vp.File, vp.Line, vp.Column)
+	return editor.FormatFileLocation(vp.File, vp.Line, vp.Column)
 }
 
 // VetRunner manages vet/lint execution
 type VetRunner struct {
-	ctx      context.Context
-	width    int
-	height   int
-	runner   *runner.CommandRunner
-	list     list.Model
-	problems []VetProblem
-	running  bool
-	status   string
+	ctx                context.Context
+	width              int
+	height             int
+	runner             *runner.CommandRunner
+	runnerStaticcheck  *runner.CommandRunner
+	list               list.Model
+	actionBar          components.ActionBar
+	problems           []VetProblem
+	running            bool
+	currentTool        string // "govet" or "staticcheck"
+	hasStaticcheck     bool
+	status             string
 }
 
 // VetKeyMap defines key bindings
@@ -93,11 +103,64 @@ func NewVetRunner(ctx context.Context) *VetRunner {
 	l.Styles.PaginationStyle = style.SubtleStyle
 	l.Styles.HelpStyle = style.SubtleStyle
 
-	return &VetRunner{
-		ctx:    ctx,
-		runner: runner.NewCommandRunner(ctx),
-		list:   l,
-		status: "Ready to run vet",
+	// Check if staticcheck is available first
+	hasStaticcheck := false
+	if _, err := exec.LookPath("staticcheck"); err == nil {
+		hasStaticcheck = true
+	}
+
+	vr := &VetRunner{
+		ctx:               ctx,
+		runner:            runner.NewCommandRunner(ctx),
+		runnerStaticcheck: runner.NewCommandRunner(ctx),
+		list:              l,
+		actionBar:         components.NewActionBar(),
+		problems:          []VetProblem{},
+		running:           false,
+		currentTool:       "",
+		hasStaticcheck:    hasStaticcheck,
+		status:            "Ready to run vet",
+	}
+	vr.updateActionBar()
+	return vr
+}
+
+// updateActionBar updates the action bar based on current state
+func (vr *VetRunner) updateActionBar() {
+	vr.actionBar.Clear()
+	
+	if vr.running {
+		vr.actionBar.AddAction(components.Action{
+			Key:         "s",
+			Label:       "Stop",
+			Description: "Stop vet/staticcheck",
+			Primary:     true,
+		})
+	} else {
+		label := "Run Vet"
+		if vr.hasStaticcheck {
+			label = "Run Vet + Lint"
+		}
+		vr.actionBar.AddAction(components.Action{
+			Key:         "r",
+			Label:       label,
+			Description: "Run go vet and staticcheck",
+			Primary:     true,
+		})
+		if len(vr.problems) > 0 {
+			vr.actionBar.AddAction(components.Action{
+				Key:         "o",
+				Label:       "Open File",
+				Description: "Open selected problem file in editor",
+				Primary:     false,
+			})
+			vr.actionBar.AddAction(components.Action{
+				Key:         "enter",
+				Label:       "Open File",
+				Description: "Open selected problem file in editor",
+				Primary:     false,
+			})
+		}
 	}
 }
 
@@ -110,16 +173,29 @@ func (vr VetRunner) Init() tea.Cmd {
 func (vr *VetRunner) SetSize(width, height int) {
 	vr.width = width
 	vr.height = height
+	vr.actionBar.SetWidth(width)
+	// Account for header, status, and action bar (calculate dynamically)
+	actionBarHeight := vr.actionBar.Height()
 	vr.list.SetWidth(width)
-	vr.list.SetHeight(height - 4) // Account for header and status
+	vr.list.SetHeight(height - 4 - actionBarHeight)
 }
 
-// runVet executes go vet ./...
+// hasStaticcheckAvailable checks if staticcheck is available
+func (vr *VetRunner) hasStaticcheckAvailable() bool {
+	_, err := exec.LookPath("staticcheck")
+	return err == nil
+}
+
+// runVet executes go vet and optionally staticcheck
 func (vr *VetRunner) runVet() tea.Cmd {
 	vr.running = true
+	vr.currentTool = "govet"
 	vr.status = "Running vet..."
 	vr.problems = []VetProblem{}
 	vr.updateList()
+	vr.updateActionBar()
+
+	// Start with go vet
 	return vr.runner.Run("go", "vet", "./...")
 }
 
@@ -142,12 +218,45 @@ func (vr *VetRunner) parseVetLine(line string) *VetProblem {
 		Column:  colNum,
 		Message: matches[4],
 		Raw:     line,
+		Tool:    "govet",
+	}
+}
+
+// parseStaticcheckLine parses a staticcheck output line
+// Example: file.go:10:5: message (SA1000)
+var staticcheckLineRegex = regexp.MustCompile(`^(.+\.go):(\d+):(\d+):\s*(.+)$`)
+
+func (vr *VetRunner) parseStaticcheckLine(line string) *VetProblem {
+	matches := staticcheckLineRegex.FindStringSubmatch(line)
+	if len(matches) < 5 {
+		return nil
+	}
+
+	lineNum, _ := strconv.Atoi(matches[2])
+	colNum, _ := strconv.Atoi(matches[3])
+
+	return &VetProblem{
+		File:    matches[1],
+		Line:    lineNum,
+		Column:  colNum,
+		Message: matches[4],
+		Raw:     line,
+		Tool:    "staticcheck",
 	}
 }
 
 // handleVetOutput processes output from go vet
 func (vr *VetRunner) handleVetOutput(output runner.CommandOutput) tea.Cmd {
 	if problem := vr.parseVetLine(output.Line); problem != nil {
+		vr.problems = append(vr.problems, *problem)
+		vr.updateList()
+	}
+	return nil
+}
+
+// handleStaticcheckOutput processes output from staticcheck
+func (vr *VetRunner) handleStaticcheckOutput(output runner.CommandOutput) tea.Cmd {
+	if problem := vr.parseStaticcheckLine(output.Line); problem != nil {
 		vr.problems = append(vr.problems, *problem)
 		vr.updateList()
 	}
@@ -161,13 +270,46 @@ func (vr *VetRunner) updateList() {
 		items[i] = problem
 	}
 	vr.list.SetItems(items)
+	vr.updateActionBar()
+}
+
+// updateStatus updates the status message based on results
+func (vr *VetRunner) updateStatus() {
+	if len(vr.problems) == 0 {
+		tools := "vet"
+		if vr.hasStaticcheck {
+			tools += " and staticcheck"
+		}
+		vr.status = "No issues found with " + tools
+	} else {
+		vetCount := 0
+		staticcheckCount := 0
+		for _, problem := range vr.problems {
+			if problem.Tool == "govet" {
+				vetCount++
+			} else if problem.Tool == "staticcheck" {
+				staticcheckCount++
+			}
+		}
+
+		parts := []string{}
+		if vetCount > 0 {
+			parts = append(parts, strconv.Itoa(vetCount)+" vet")
+		}
+		if staticcheckCount > 0 {
+			parts = append(parts, strconv.Itoa(staticcheckCount)+" staticcheck")
+		}
+
+		vr.status = lipgloss.NewStyle().Foreground(style.WarningColor).Render(
+			strings.Join(parts, ", ") + " issues found")
+	}
 }
 
 // openSelectedFile opens the currently selected problem file
 func (vr *VetRunner) openSelectedFile() tea.Cmd {
 	if selected, ok := vr.list.SelectedItem().(VetProblem); ok {
 		return func() tea.Msg {
-			err := util.OpenInEditor(selected.File, selected.Line, selected.Column)
+			err := editor.OpenAtLine(selected.File, selected.Line, selected.Column)
 			if err != nil {
 				return runner.CommandOutput{Line: "Error opening file: " + err.Error()}
 			}
@@ -195,7 +337,12 @@ func (vr *VetRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 
 	case runner.CommandOutput:
 		if vr.running {
-			cmd := vr.handleVetOutput(msg)
+			var cmd tea.Cmd
+			if vr.currentTool == "govet" {
+				cmd = vr.handleVetOutput(msg)
+			} else if vr.currentTool == "staticcheck" {
+				cmd = vr.handleStaticcheckOutput(msg)
+			}
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -203,12 +350,23 @@ func (vr *VetRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 
 	case runner.CommandFinished:
 		if vr.running {
-			vr.running = false
-			if len(vr.problems) == 0 {
-				vr.status = "No issues found"
-			} else {
-				vr.status = lipgloss.NewStyle().Foreground(style.WarningColor).Render(
-					strconv.Itoa(len(vr.problems)) + " issues found")
+			if vr.currentTool == "govet" {
+				// Go vet finished, start staticcheck if available
+				if vr.hasStaticcheck {
+					vr.currentTool = "staticcheck"
+					vr.status = "Running staticcheck..."
+					cmds = append(cmds, vr.runnerStaticcheck.Run("staticcheck", "./..."))
+				} else {
+					// No staticcheck, finish
+					vr.running = false
+					vr.updateStatus()
+					vr.updateActionBar()
+				}
+			} else if vr.currentTool == "staticcheck" {
+				// Staticcheck finished, we're done
+				vr.running = false
+				vr.updateStatus()
+				vr.updateActionBar()
 			}
 		}
 	}
@@ -225,20 +383,39 @@ func (vr *VetRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 
 // View renders the vet runner
 func (vr VetRunner) View() string {
-	var content strings.Builder
+	var parts []string
+
+	// Action bar at the top
+	actionBarView := vr.actionBar.View()
+	if actionBarView != "" {
+		parts = append(parts, actionBarView, "")
+	}
 
 	// Header
 	header := style.HeaderStyle.Render("Vet & Lint")
-	content.WriteString(header + "\n")
+	parts = append(parts, header)
+
+	// Tools info
+	tools := "go vet"
+	if vr.hasStaticcheck {
+		tools += " + staticcheck"
+	}
+	toolsInfo := style.SubtleStyle.Render("Tools: " + tools)
+	parts = append(parts, toolsInfo)
 
 	// Status
 	statusBar := style.StatusStyle.Render(vr.status)
-	content.WriteString(statusBar + "\n")
+	parts = append(parts, statusBar, "")
 
 	// List
-	content.WriteString(vr.list.View())
+	listView := vr.list.View()
+	if listView == "" && actionBarView != "" {
+		parts = append(parts, style.SubtleStyle.Render("Press a key above to run vet and lint"))
+	} else {
+		parts = append(parts, listView)
+	}
 
-	return content.String()
+	return strings.Join(parts, "\n")
 }
 
 // Refresh triggers a refresh
@@ -256,12 +433,20 @@ func (vr VetRunner) GetKeyHints() []string {
 	if vr.running {
 		return []string{"running..."}
 	}
-	return []string{"r: run vet", "o/enter: open file", "↑↓: navigate"}
+	hints := []string{"r: run vet"}
+	if vr.hasStaticcheck {
+		hints[0] = "r: run vet+lint"
+	}
+	hints = append(hints, "o/enter: open file", "↑↓: navigate")
+	return hints
 }
 
 // Cleanup performs cleanup
 func (vr VetRunner) Cleanup() {
 	if vr.runner != nil {
 		vr.runner.Stop()
+	}
+	if vr.runnerStaticcheck != nil {
+		vr.runnerStaticcheck.Stop()
 	}
 }
