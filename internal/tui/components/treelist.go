@@ -294,30 +294,33 @@ func (tl TreeList) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-// renderNode renders a single tree node
+// renderNode renders a single tree node with improved accessibility
 func (tl TreeList) renderNode(node *TreeNode, selected bool) string {
-	// Create indentation
+	// Create indentation with better visual hierarchy
 	indent := strings.Repeat("  ", node.Level)
 	
-	// Expansion indicator
+	// Expansion indicator with text fallback
 	var expandIcon string
 	if len(node.Children) > 0 {
 		if node.Expanded {
-			expandIcon = style.ExpandedIcon
+			expandIcon = style.GetStatusIcon(style.ExpandedIcon, style.ExpandedText)
 		} else {
-			expandIcon = style.CollapsedIcon
+			expandIcon = style.GetStatusIcon(style.CollapsedIcon, style.CollapsedText)
 		}
 	} else {
-		expandIcon = " "
+		expandIcon = "  " // Two spaces for alignment
 	}
 	
-	// Status icon
+	// Status icon with text fallback
 	statusIcon := node.Icon
 	if statusIcon == "" {
-		statusIcon = style.PendingIcon
+		statusIcon = style.GetStatusIcon(style.PendingIcon, style.PendingText)
+	} else {
+		// Ensure icon has text label for accessibility
+		statusIcon = style.GetStatusIconOnly(statusIcon, "")
 	}
 	
-	// Build the line
+	// Build the line with better spacing
 	content := lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		indent,
@@ -328,31 +331,38 @@ func (tl TreeList) renderNode(node *TreeNode, selected bool) string {
 		node.Label,
 	)
 	
-	// Add status if present
+	// Add status if present with text labels for accessibility
 	if node.Status != "" {
 		var statusStyle lipgloss.Style
+		var statusText string
 		switch node.Status {
 		case "pass", "ok":
 			statusStyle = style.SuccessStyle
+			statusText = style.GetStatusIcon(style.PassIcon, style.PassText) + " " + node.Status
 		case "fail", "error":
 			statusStyle = style.ErrorStyle
+			statusText = style.GetStatusIcon(style.FailIcon, style.FailText) + " " + node.Status
 		case "skip":
 			statusStyle = style.WarningStyle
+			statusText = style.GetStatusIcon(style.SkipIcon, style.SkipText) + " " + node.Status
 		default:
 			statusStyle = lipgloss.NewStyle().Foreground(style.SubtleColor)
+			statusText = node.Status
 		}
 		
 		content = lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			content,
 			" ",
-			statusStyle.Render(node.Status),
+			statusStyle.Render(statusText),
 		)
 	}
 	
-	// Apply selection styling
+	// Apply selection styling with better visibility
 	if selected {
-		return style.SelectedListItemStyle.Width(tl.width).Render(content)
+		// Add selection indicator for better visibility
+		selectedContent := "▶ " + content
+		return style.SelectedListItemStyle.Width(tl.width).Render(selectedContent)
 	}
 	
 	return style.ListItemStyle.Width(tl.width).Render(content)

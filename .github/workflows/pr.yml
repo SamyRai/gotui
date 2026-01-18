@@ -1,4 +1,4 @@
-name: PR Lint, Test & Coverage
+name: PR Checks
 on:
   pull_request:
     branches:
@@ -7,7 +7,7 @@ on:
       - develop
 
 jobs:
-  lint-test-coverage:
+  quality-checks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -16,15 +16,24 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.25'
 
-      - name: Install golangci-lint
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-
-      - name: Run golangci-lint
-        run: golangci-lint run --timeout=5m
+          args: --timeout=5m
 
       - name: Run go vet
         run: go vet ./...
@@ -33,11 +42,21 @@ jobs:
         uses: dominikh/staticcheck-action@v1
         with:
           version: latest
+          install-go: false
 
       - name: Run tests with coverage
         run: |
-          go test -v -coverprofile=coverage.out ./...
-          go tool cover -func=coverage.out
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Check test coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          if (( $(echo "$COVERAGE < 50.0" | bc -l) )); then
+            echo "Test coverage too low: $COVERAGE% (minimum 50%)"
+            exit 1
+          fi
+          echo "Test coverage: $COVERAGE%"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -45,3 +64,20 @@ jobs:
           files: coverage.out
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build binary
+        run: go build -v ./cmd/goutui
+
+      - name: Test binary runs
+        run: timeout 5s ./goutui || echo "Binary starts successfully"

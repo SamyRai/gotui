@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"goutui/internal/runner"
 	"goutui/internal/style"
+	"goutui/internal/tui/components"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -14,14 +15,15 @@ import (
 
 // BenchmarkRunner manages benchmark execution
 type BenchmarkRunner struct {
-	ctx     context.Context
-	width   int
-	height  int
-	runner  *runner.CommandRunner
-	parser  *runner.BenchmarkParser
-	table   table.Model
-	running bool
-	status  string
+	ctx       context.Context
+	width     int
+	height    int
+	runner    *runner.CommandRunner
+	parser    *runner.BenchmarkParser
+	table     table.Model
+	actionBar components.ActionBar
+	running   bool
+	status    string
 }
 
 // NewBenchmarkRunner creates a new benchmark runner
@@ -55,12 +57,36 @@ func NewBenchmarkRunner(ctx context.Context) *BenchmarkRunner {
 		Bold(false)
 	t.SetStyles(s)
 
-	return &BenchmarkRunner{
-		ctx:    ctx,
-		runner: runner.NewCommandRunner(ctx),
-		parser: runner.NewBenchmarkParser(),
-		table:  t,
-		status: "Ready to run benchmarks",
+	br := &BenchmarkRunner{
+		ctx:       ctx,
+		runner:    runner.NewCommandRunner(ctx),
+		parser:    runner.NewBenchmarkParser(),
+		table:     t,
+		actionBar: components.NewActionBar(),
+		status:    "Ready to run benchmarks",
+	}
+	br.updateActionBar()
+	return br
+}
+
+// updateActionBar updates the action bar based on current state
+func (br *BenchmarkRunner) updateActionBar() {
+	br.actionBar.Clear()
+	
+	if br.running {
+		br.actionBar.AddAction(components.Action{
+			Key:         "s",
+			Label:       "Stop",
+			Description: "Stop running benchmarks",
+			Primary:     true,
+		})
+	} else {
+		br.actionBar.AddAction(components.Action{
+			Key:         "r",
+			Label:       "Run Benchmarks",
+			Description: "Run all benchmarks",
+			Primary:     true,
+		})
 	}
 }
 
@@ -73,8 +99,11 @@ func (br BenchmarkRunner) Init() tea.Cmd {
 func (br *BenchmarkRunner) SetSize(width, height int) {
 	br.width = width
 	br.height = height
+	br.actionBar.SetWidth(width)
+	// Account for header, status, and action bar (calculate dynamically)
+	actionBarHeight := br.actionBar.Height()
 	br.table.SetWidth(width - 4)
-	br.table.SetHeight(height - 8) // Account for header and status
+	br.table.SetHeight(height - 8 - actionBarHeight)
 }
 
 // runBenchmarks executes go test -bench
@@ -165,6 +194,7 @@ func (br *BenchmarkRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 				br.running = true
 				br.parser = runner.NewBenchmarkParser()
 				br.status = "Starting benchmarks..."
+				br.updateActionBar()
 				return br, br.runBenchmarks()
 			}
 		case "s":
@@ -173,6 +203,7 @@ func (br *BenchmarkRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 				br.parser.Finish()
 				br.status = "Stopped"
 				br.runner.Stop()
+				br.updateActionBar()
 				return br, nil
 			}
 		}
@@ -190,6 +221,7 @@ func (br *BenchmarkRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 			br.running = false
 			br.parser.Finish()
 			br.updateTable()
+			br.updateActionBar()
 		}
 	}
 
@@ -205,20 +237,31 @@ func (br *BenchmarkRunner) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 
 // View renders the benchmark runner
 func (br BenchmarkRunner) View() string {
-	var content strings.Builder
+	var parts []string
+
+	// Action bar at the top
+	actionBarView := br.actionBar.View()
+	if actionBarView != "" {
+		parts = append(parts, actionBarView, "")
+	}
 
 	// Header
 	header := style.HeaderStyle.Render("Benchmarks")
-	content.WriteString(header + "\n\n")
+	parts = append(parts, header, "")
 
 	// Status
 	statusBar := style.StatusStyle.Render(br.status)
-	content.WriteString(statusBar + "\n\n")
+	parts = append(parts, statusBar, "")
 
 	// Table
-	content.WriteString(br.table.View())
+	tableView := br.table.View()
+	if tableView == "" && actionBarView != "" {
+		parts = append(parts, style.SubtleStyle.Render("Press a key above to run benchmarks"))
+	} else {
+		parts = append(parts, tableView)
+	}
 
-	return content.String()
+	return strings.Join(parts, "\n")
 }
 
 // Refresh triggers a refresh

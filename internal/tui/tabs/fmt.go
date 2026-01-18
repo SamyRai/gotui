@@ -2,6 +2,7 @@ package tabs
 
 import (
 	"context"
+	"goutui/internal/editor"
 	"goutui/internal/runner"
 	"goutui/internal/style"
 	"goutui/internal/tui/components"
@@ -18,6 +19,7 @@ type FmtDiff struct {
 	height     int
 	runner     *runner.CommandRunner
 	diffViewer components.DiffViewer
+	actionBar  components.ActionBar
 	running    bool
 	hasChanges bool
 	status     string
@@ -55,11 +57,49 @@ func DefaultFmtKeyMap() FmtKeyMap {
 
 // NewFmtDiff creates a new fmt diff checker
 func NewFmtDiff(ctx context.Context) *FmtDiff {
-	return &FmtDiff{
+	fd := &FmtDiff{
 		ctx:        ctx,
 		runner:     runner.NewCommandRunner(ctx),
 		diffViewer: components.NewDiffViewer("Format Diff"),
+		actionBar:  components.NewActionBar(),
 		status:     "Ready to check format",
+	}
+	fd.updateActionBar()
+	return fd
+}
+
+// updateActionBar updates the action bar based on current state
+func (fd *FmtDiff) updateActionBar() {
+	fd.actionBar.Clear()
+	
+	if fd.running {
+		fd.actionBar.AddAction(components.Action{
+			Key:         "s",
+			Label:       "Stop",
+			Description: "Stop format check",
+			Primary:     true,
+		})
+	} else {
+		fd.actionBar.AddAction(components.Action{
+			Key:         "r",
+			Label:       "Check Format",
+			Description: "Check if code is formatted correctly",
+			Primary:     true,
+		})
+		fd.actionBar.AddAction(components.Action{
+			Key:         "a",
+			Label:       "Auto Format",
+			Description: "Automatically format all files",
+			Primary:     false,
+		})
+		if fd.hasChanges {
+			fd.actionBar.AddAction(components.Action{
+				Key:         "o",
+				Label:       "Open File",
+				Description: "Open file from diff in editor",
+				Primary:     false,
+			})
+		}
 	}
 }
 
@@ -72,8 +112,10 @@ func (fd FmtDiff) Init() tea.Cmd {
 func (fd *FmtDiff) SetSize(width, height int) {
 	fd.width = width
 	fd.height = height
-	// Account for header lines (title, status, spacing lines = ~5 lines)
-	contentHeight := height - 5
+	fd.actionBar.SetWidth(width)
+	// Account for header lines and action bar (calculate dynamically)
+	actionBarHeight := fd.actionBar.Height()
+	contentHeight := height - actionBarHeight - 5
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -84,6 +126,7 @@ func (fd *FmtDiff) SetSize(width, height int) {
 func (fd *FmtDiff) runFmtCheck() tea.Cmd {
 	fd.running = true
 	fd.status = "Checking format..."
+	fd.updateActionBar()
 	return fd.runner.Run("gofmt", "-d", "./...")
 }
 
@@ -127,8 +170,10 @@ func (fd *FmtDiff) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 				// Open file from diff (basic implementation)
 				filePath := fd.diffViewer.GetFirstFilePathFromDiff()
 				if filePath != "" {
-					// Use util/editor.go logic to open file (pseudo-code)
-					// util.OpenFileInEditor(filePath)
+					err := editor.OpenFile(filePath)
+					if err != nil {
+						// Handle error - could show notification
+					}
 				}
 			}
 		}
@@ -151,6 +196,7 @@ func (fd *FmtDiff) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 				fd.status = "Format changes detected"
 				fd.hasChanges = true
 			}
+			fd.updateActionBar()
 		}
 	}
 
@@ -166,6 +212,9 @@ func (fd *FmtDiff) Update(msg tea.Msg) (TabInterface, tea.Cmd) {
 
 // View renders the fmt diff checker
 func (fd FmtDiff) View() string {
+	// Show action bar at the top
+	actionBarView := fd.actionBar.View()
+	
 	// Create header styled consistently with other tabs
 	header := lipgloss.NewStyle().
 		Foreground(style.AccentColor).
@@ -182,17 +231,22 @@ func (fd FmtDiff) View() string {
 
 	// Get clean content from diff viewer
 	content := fd.diffViewer.GetContent()
+	
+	hasContent := content != ""
 
-	// Create the complete view using lipgloss layout
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		"",                    // Empty line for spacing
-		header,                // Title
-		"",                    // Empty line
-		statusText,            // Status
-		"",                    // Empty line
-		content,               // Main content
-	)
+	// Combine all parts
+	parts := []string{}
+	if actionBarView != "" {
+		parts = append(parts, actionBarView, "")
+	}
+	parts = append(parts, header, "", statusText)
+	if hasContent {
+		parts = append(parts, "", content)
+	} else if actionBarView != "" {
+		parts = append(parts, "", style.SubtleStyle.Render("Press a key above to check formatting"))
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 // Refresh triggers a refresh

@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"goutui/internal/style"
 	"strings"
 
@@ -189,15 +190,15 @@ func (dv *DiffViewer) updateContent() {
 	dv.viewport.SetContent(content.String())
 }
 
-// formatDiffLine formats a single diff line with appropriate styling
+// formatDiffLine formats a single diff line with appropriate styling and accessibility
 func (dv *DiffViewer) formatDiffLine(line DiffLine) string {
 	var prefix string
 	var styledContent string
 
-	// Add line numbers if enabled
+	// Add line numbers if enabled with better formatting
 	if dv.showLineNumbers && line.Type != DiffLineHeader && line.Type != DiffLineHunk {
-		oldNum := " "
-		newNum := " "
+		oldNum := "    "
+		newNum := "    "
 		
 		if line.Type == DiffLineContext || line.Type == DiffLineRemoval {
 			if line.OldLineNum > 0 {
@@ -205,7 +206,7 @@ func (dv *DiffViewer) formatDiffLine(line DiffLine) string {
 					Width(4).
 					Align(lipgloss.Right).
 					Foreground(style.SubtleColor).
-					Render(string(rune(line.OldLineNum)))
+					Render(fmt.Sprintf("%4d", line.OldLineNum))
 			}
 		}
 		
@@ -215,7 +216,7 @@ func (dv *DiffViewer) formatDiffLine(line DiffLine) string {
 					Width(4).
 					Align(lipgloss.Right).
 					Foreground(style.SubtleColor).
-					Render(string(rune(line.NewLineNum)))
+					Render(fmt.Sprintf("%4d", line.NewLineNum))
 			}
 		}
 		
@@ -224,12 +225,14 @@ func (dv *DiffViewer) formatDiffLine(line DiffLine) string {
 			Render(oldNum + " " + newNum + " ")
 	}
 
-	// Apply styling based on line type
+	// Apply styling based on line type with text indicators for accessibility
 	switch line.Type {
 	case DiffLineAddition:
-		styledContent = style.DiffAddStyle.Render(line.Content)
+		// Add "+" prefix for better visibility
+		styledContent = style.DiffAddStyle.Render("+ " + line.Content)
 	case DiffLineRemoval:
-		styledContent = style.DiffRemoveStyle.Render(line.Content)
+		// Add "-" prefix for better visibility
+		styledContent = style.DiffRemoveStyle.Render("- " + line.Content)
 	case DiffLineHeader:
 		styledContent = lipgloss.NewStyle().
 			Bold(true).
@@ -247,7 +250,8 @@ func (dv *DiffViewer) formatDiffLine(line DiffLine) string {
 			Foreground(style.SubtleColor).
 			Render(line.Content)
 	default:
-		styledContent = style.DiffContextStyle.Render(line.Content)
+		// Context lines with " " prefix for alignment
+		styledContent = style.DiffContextStyle.Render("  " + line.Content)
 	}
 
 	return prefix + styledContent

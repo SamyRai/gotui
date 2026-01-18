@@ -149,7 +149,7 @@ func (tb TabBar) Update(msg tea.Msg) (TabBar, tea.Cmd) {
 	return tb, nil
 }
 
-// View renders the tab bar
+// View renders the tab bar with improved focus indication
 // If focus is true, the tab bar is visually highlighted
 func (tb TabBar) View(focus bool) string {
 	var tabs []string
@@ -157,6 +157,10 @@ func (tb TabBar) View(focus bool) string {
 		var tabStyle lipgloss.Style
 		if i == tb.activeTab {
 			tabStyle = style.ActiveTabStyle
+			// Add focus indicator when tab bar is focused
+			if focus {
+				tabStyle = tabStyle.Copy().Bold(true)
+			}
 		} else {
 			tabStyle = style.InactiveTabStyle
 		}
@@ -181,18 +185,25 @@ func (tb TabBar) View(focus bool) string {
 			Render(tabRow)
 	}
 
-	// Add a border at the bottom, highlight if focused
+	// Add a border at the bottom, highlight if focused with better visibility
 	var border lipgloss.Style
 	if focus {
 		border = lipgloss.NewStyle().
 			Foreground(style.PrimaryColor).
-			Bold(true)
+			Bold(true).
+			Border(lipgloss.ThickBorder(), false, false, true, false).
+			BorderForeground(style.PrimaryColor)
 	} else {
 		border = lipgloss.NewStyle().
 			Foreground(style.BorderColor)
 	}
 
-	borderLine := border.Render(lipgloss.NewStyle().Width(tb.width).Render("─"))
+	// Use double line for better visibility when focused
+	borderChar := "─"
+	if focus {
+		borderChar = "═"
+	}
+	borderLine := border.Render(lipgloss.NewStyle().Width(tb.width).Render(borderChar))
 
 	return lipgloss.JoinVertical(lipgloss.Left, tabRow, borderLine)
 }
