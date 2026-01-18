@@ -4,6 +4,10 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/damirmukimov/gotui/ci.yml)](https://github.com/damirmukimov/gotui/actions)
 
+> **⚠️ Experimental Work - Not Recommended for Use**
+> 
+> This library is experimental work and is **not recommended for production use**. It is **not in active development** and may contain bugs, incomplete features, or breaking changes. Use at your own risk.
+
 A modern terminal user interface for Go development that provides an integrated development environment in your terminal. Run tests, benchmarks, formatting, linting, and building with live output and intuitive navigation.
 
 ## ✨ Features
